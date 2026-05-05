@@ -10,8 +10,14 @@ breakevens    = spot ± straddle
 
 Higher implied_move = market expects bigger move = richer premium per dollar of strike. That's where the cross-sectional opportunity is to sell premium (or to fade rich vol). Top of the list = richest; bottom = cheapest.
 
+### Cadence
+
+The scan is locked to the **Friday-close → next-Friday-expiry** cycle. A launchd agent (`com.kuba.psscan`) fires every Friday at 21:30 UTC (≈30 min after the US cash-equity close), pulls the CBOE delayed feed, computes the snapshot, and pushes `docs/results.json` to GitHub Pages. That snapshot then sits unchanged for the week until the next Friday's run.
+
+CBOE's delayed feed is current-only (no historical endpoint), so backfilling a missed Friday means switching to WRDS/OptionMetrics or IBKR.
+
 ### Caveat: stale last-prices
-When a leg's last trade is from earlier in the day, put-call parity (C − P ≈ S − K) breaks and the straddle skews high. Best run after Friday close so both legs have fresh prints.
+When a leg's last trade is from earlier in the day, put-call parity (C − P ≈ S − K) breaks and the straddle skews high. Friday close gives the freshest prints across both legs.
 
 ## Run
 
