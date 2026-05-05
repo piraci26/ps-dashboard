@@ -6,7 +6,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>P/S Scan — Implied Move (ATM Straddle)</title>
+<title>P/S Scan — Weekly Yield on Capital</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -20,10 +20,9 @@
     </span>
   </div>
   <p class="subtitle">
-    The market's priced-in <strong>expected move</strong> for each name by Friday.
-    Sum the ATM call + put last prices, divide by strike — that's the breakeven move
-    a long straddle buyer needs, and equivalently the % of strike you collect for selling
-    the straddle. <span class="formula">implied_move = (call_last + put_last) / K</span>.
+    Sell the ATM straddle, post the strike as collateral, collect the premium for one week —
+    that ratio is your gross weekly return on allocated capital.
+    <span class="formula">yield = (call_last + put_last) / strike</span>.
   </p>
   <div class="spec-row">
     <span class="spec-pill"><span class="label">Strike</span><b>ATM</b></span>
@@ -33,28 +32,48 @@
     <span class="spec-pill"><span class="label">Universe</span><b id="spec-uni">—</b></span>
     <span class="spec-pill"><span class="label">Source</span><b>CBOE delayed</b></span>
   </div>
+  <div class="filter-row">
+    <label for="mcap-filter">Min market cap</label>
+    <div class="filter-input-group">
+      <span class="filter-prefix">$</span>
+      <input id="mcap-filter" type="number" step="0.1" min="0" placeholder="3.5">
+      <span class="filter-suffix">B+</span>
+    </div>
+    <div class="filter-presets">
+      <button type="button" data-mcap="3.5">$3.5B</button>
+      <button type="button" data-mcap="10">$10B</button>
+      <button type="button" data-mcap="50">$50B</button>
+      <button type="button" data-mcap="200">$200B</button>
+      <button type="button" data-mcap="1000">$1T</button>
+    </div>
+    <label class="hide-stale-label">
+      <input type="checkbox" id="hide-stale" checked>
+      <span>Hide stale prints</span>
+    </label>
+  </div>
 </header>
 
 <main>
 <section class="accent">
-  <h2><span class="dot dot-accent"></span>Implied move ranking <span class="count" id="full-count"></span></h2>
+  <h2><span class="dot dot-accent"></span>Yield ranking <span class="count" id="full-count"></span></h2>
   <div id="full-table" class="table-wrap"></div>
 </section>
 </main>
 
 <footer>
   <p>
-    <strong>Note on last prices:</strong> CBOE delayed feed. ATM straddles are computed from <em>last_trade_price</em> per your spec.
-    When a leg's last trade is stale relative to current spot, put-call parity (C − P ≈ S − K) will be violated and the straddle skews high.
-    Best run after Friday close so both legs print fresh.
+    Dashboard refreshes when the launchd agent runs (Fri 21:30 UTC, post-close).
     Data: <a href="https://cdn.cboe.com/api/global/delayed_quotes/options/" target="_blank" rel="noopener">CBOE delayed quotes</a> ·
-    <a href="https://github.com/piraci26/ps-dashboard" target="_blank" rel="noopener">source</a>
+    <a href="https://github.com/piraci26/ps-dashboard" target="_blank" rel="noopener">source</a>.
+    Stale last-prices on illiquid legs can violate put-call parity and skew the yield up — fresh prints land at Friday close.
   </p>
 </footer>
 
 <script>
 const fmtPct = (p, dp=2) => p == null ? '—' : `${p.toFixed(dp)}%`;
 const fmtNum = (n, dp=2) => n == null ? '—' : Number(n).toFixed(dp);
+const fmtMcap = b => !b ? '—' : b >= 1000 ? `$${(b/1000).toFixed(2)}T` : `$${b}B`;
+const fmt100k = n => n == null ? '—' : `$${Math.round(n).toLocaleString()}`;
 const fmtUpd = iso => {
   const d = new Date(iso);
   const parts = new Intl.DateTimeFormat('en-GB', {
@@ -66,21 +85,24 @@ const fmtUpd = iso => {
   return `Updated ${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} ${parts.timeZoneName}`;
 };
 
-const sortState = { 'full-table': { col: 'implied_move', dir: 'desc' } };
+const sortState = { 'full-table': { col: 'yield_pct', dir: 'desc' } };
 
 const COLS = [
-  { key: 'rank',         label: '#',         cls: 'num',  type: 'num' },
-  { key: 'name',         label: 'Company',   cls: '',     type: 'str' },
-  { key: 'sym',          label: 'Sym',       cls: '',     type: 'str' },
-  { key: 'spot',         label: 'Spot',      cls: 'num',  type: 'num' },
-  { key: 'strike',       label: 'K (ATM)',   cls: 'num',  type: 'num' },
-  { key: 'call_last',    label: 'Call last', cls: 'num',  type: 'num' },
-  { key: 'put_last',     label: 'Put last',  cls: 'num',  type: 'num' },
-  { key: 'straddle',     label: 'Straddle',  cls: 'num',  type: 'num' },
-  { key: 'implied_move', label: 'Move %',    cls: 'num ps-cell',  type: 'num' },
-  { key: 'breakeven_up', label: 'BE ↑',      cls: 'num',  type: 'num' },
-  { key: 'breakeven_dn', label: 'BE ↓',      cls: 'num',  type: 'num' },
-  { key: 'iv30',         label: 'IV30',      cls: 'num',  type: 'num' },
+  { key: 'rank',             label: '#',          cls: 'num',  type: 'num' },
+  { key: 'name',             label: 'Company',    cls: '',     type: 'str' },
+  { key: 'sym',              label: 'Sym',        cls: '',     type: 'str' },
+  { key: 'mcap',             label: 'Mkt Cap',    cls: 'num',  type: 'num' },
+  { key: 'spot',             label: 'Spot',       cls: 'num',  type: 'num' },
+  { key: 'strike',           label: 'K (ATM)',    cls: 'num',  type: 'num' },
+  { key: 'call_last',        label: 'Call last',  cls: 'num',  type: 'num' },
+  { key: 'put_last',         label: 'Put last',   cls: 'num',  type: 'num' },
+  { key: 'straddle',         label: 'Straddle',   cls: 'num',  type: 'num' },
+  { key: 'yield_pct',        label: 'Yield %',    cls: 'num ps-cell',  type: 'num' },
+  { key: 'parity_skew_pct',  label: 'Skew',       cls: 'num',  type: 'num' },
+  { key: 'premium_per_100k', label: '$ / 100k',   cls: 'num',  type: 'num' },
+  { key: 'breakeven_up',     label: 'BE ↑',       cls: 'num',  type: 'num' },
+  { key: 'breakeven_dn',     label: 'BE ↓',       cls: 'num',  type: 'num' },
+  { key: 'iv30',             label: 'IV30',       cls: 'num',  type: 'num' },
 ];
 
 function sortRows(rows, col, dir) {
@@ -98,7 +120,7 @@ function sortRows(rows, col, dir) {
 function heatbar(value, maxValue) {
   if (value == null || maxValue <= 0) return '';
   const pct = Math.min(100, (value / maxValue) * 100);
-  return `<span class="heatbar"><span class="heatbar-fill avg" style="width:${pct.toFixed(1)}%"></span></span>`;
+  return `<span class="heatbar"><span class="heatbar-fill" style="width:${pct.toFixed(1)}%"></span></span>`;
 }
 
 function fmtCell(col, r, ctx) {
@@ -107,6 +129,7 @@ function fmtCell(col, r, ctx) {
     case 'rank': return r.rank;
     case 'sym':  return `<strong>${r.sym}</strong>`;
     case 'name': return r.name;
+    case 'mcap': return fmtMcap(v);
     case 'spot':
     case 'strike':
     case 'breakeven_up':
@@ -115,19 +138,24 @@ function fmtCell(col, r, ctx) {
     case 'put_last':
     case 'straddle':    return `$${fmtNum(v)}`;
     case 'iv30':        return v ? `${v.toFixed(1)}` : '—';
-    case 'implied_move':
-      return heatbar(v, ctx.maxMove) + `<strong>${fmtPct(v, 2)}</strong>`;
+    case 'parity_skew_pct':
+      if (v == null) return '—';
+      const cls = r.stale ? 'stale' : '';
+      return `<span class="${cls}">${v.toFixed(2)}%</span>`;
+    case 'premium_per_100k': return fmt100k(v);
+    case 'yield_pct':
+      return heatbar(v, ctx.maxYield) + `<strong>${fmtPct(v, 2)}</strong>`;
     default: return v ?? '—';
   }
 }
 
 function renderTable(allRows, tableId) {
-  if (!allRows || allRows.length === 0) return '<p class="empty">No data.</p>';
+  if (!allRows || allRows.length === 0) return '<p class="empty">No rows match the current filter.</p>';
   const state = sortState[tableId];
-  const ranked = allRows.slice().sort((a, b) => b.implied_move - a.implied_move);
+  const ranked = allRows.slice().sort((a, b) => b.yield_pct - a.yield_pct);
   ranked.forEach((r, i) => r.rank = i + 1);
   const sorted = sortRows(ranked, state.col, state.dir);
-  const ctx = { maxMove: Math.max(...allRows.map(r => r.implied_move || 0)) };
+  const ctx = { maxYield: Math.max(...allRows.map(r => r.yield_pct || 0)) };
   const arrow = (key) => {
     if (state.col !== key) return '<span class="sort-arrow">↕</span>';
     return state.dir === 'asc' ? '<span class="sort-arrow active">↑</span>' : '<span class="sort-arrow active">↓</span>';
@@ -145,11 +173,24 @@ function renderTable(allRows, tableId) {
 }
 
 let dataCache = null;
+const DEFAULT_MIN_MCAP = 3.5;
+
+function applyFilter() {
+  if (!dataCache) return [];
+  const minMcap = parseFloat(document.getElementById('mcap-filter').value) || 0;
+  const hideStale = document.getElementById('hide-stale').checked;
+  return dataCache.rows.filter(r => {
+    if ((r.mcap || 0) < minMcap) return false;
+    if (hideStale && r.stale) return false;
+    return true;
+  });
+}
 
 function rerender() {
-  if (!dataCache) return;
-  document.getElementById('full-table').innerHTML = renderTable(dataCache.rows, 'full-table');
-  document.getElementById('full-count').textContent = `(${dataCache.rows.length})`;
+  const filtered = applyFilter();
+  document.getElementById('full-table').innerHTML = renderTable(filtered, 'full-table');
+  const total = dataCache ? dataCache.rows.length : 0;
+  document.getElementById('full-count').textContent = `(${filtered.length} of ${total})`;
   attachSortHandlers();
 }
 
@@ -170,21 +211,41 @@ function attachSortHandlers() {
   });
 }
 
+function setMcap(value, source) {
+  const input = document.getElementById('mcap-filter');
+  input.value = value;
+  document.querySelectorAll('.filter-presets button').forEach(b => {
+    b.classList.toggle('active', parseFloat(b.dataset.mcap) === parseFloat(value));
+  });
+  rerender();
+}
+
+document.getElementById('mcap-filter').addEventListener('input', () => {
+  document.querySelectorAll('.filter-presets button').forEach(b => b.classList.remove('active'));
+  rerender();
+});
+document.getElementById('hide-stale').addEventListener('change', rerender);
+document.querySelectorAll('.filter-presets button').forEach(b => {
+  b.addEventListener('click', () => setMcap(b.dataset.mcap, 'preset'));
+});
+
 async function load() {
   try {
     const res = await fetch(`results.json?t=${Date.now()}`);
     const data = await res.json();
     dataCache = data;
     document.getElementById('updated').textContent = fmtUpd(data.updated_at);
-    document.getElementById('stats').textContent = `${data.scanned} tickers · scan ${data.scan_seconds}s`;
+    document.getElementById('stats').textContent =
+      `${data.scanned} priced of ${data.universe_size || data.scanned} · scan ${data.scan_seconds}s`;
     document.getElementById('spec-expiry').textContent = data.target_expiry || '—';
-    document.getElementById('spec-uni').textContent = `${data.scanned} largest US`;
+    document.getElementById('spec-uni').textContent = `${data.universe_size || data.scanned} tickers`;
     if (data.target_expiry) {
       const t = new Date(data.target_expiry + 'T00:00:00Z');
       const days = Math.round((t - new Date()) / 86400000);
       document.getElementById('spec-dte').textContent = `${days}d`;
     }
-    rerender();
+    if (!document.getElementById('mcap-filter').value) setMcap(DEFAULT_MIN_MCAP, 'init');
+    else rerender();
   } catch (e) {
     document.getElementById('updated').textContent = `Load error: ${e.message}`;
   }
