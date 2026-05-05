@@ -21,7 +21,11 @@ from datetime import datetime, timezone, date, timedelta
 HERE = os.path.dirname(os.path.abspath(__file__))
 TICKERS = json.load(open(os.path.join(HERE, "universe.json")))
 NAMES = json.load(open(os.path.join(HERE, "universe_names.json")))
-SHARES = {k: v.get("shares") for k, v in json.load(open(os.path.join(HERE, "shares_outstanding.json"))).items()}
+_SHARES_RAW = json.load(open(os.path.join(HERE, "shares_outstanding.json")))
+SHARES   = {k: v.get("shares")    for k, v in _SHARES_RAW.items()}
+MCAP_REF = {k: v.get("mcap_ref")  for k, v in _SHARES_RAW.items()}
+# Hardcoded fallbacks for tickers where stockanalysis returned no mcap_ref
+MCAP_FALLBACK = {"BRK.B": 1100e9}
 
 CBOE = "https://cdn.cboe.com/api/global/delayed_quotes/options/{sym}.json"
 SSL_CTX = ssl.create_default_context()
@@ -81,6 +85,12 @@ def last_or_mid(o):
 
 
 def live_mcap_b(sym: str, price: float):
+    """Market cap in $B. Prefer mcap_ref (vendor-reported) over price×shares
+    because share counts for ADRs reflect the local listing, not the ADR ratio,
+    and inflate the calc (e.g. TM, BCH, TSM)."""
+    ref = MCAP_REF.get(sym) or MCAP_FALLBACK.get(sym)
+    if ref:
+        return round(ref / 1e9)
     s = SHARES.get(sym)
     if s and price:
         return round(price * s / 1e9)
