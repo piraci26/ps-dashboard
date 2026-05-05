@@ -1,10 +1,17 @@
-# P/S Dashboard
+# P/S Dashboard — ATM Straddle Implied Move
 
-Cross-sectional ranking of how richly priced near-week options are across the top-50 US equities.
+Cross-sectional ranking of the **expected % move** the market is pricing for each name by Friday.
 
-**P/S = option mid ÷ spot**, evaluated at 30Δ for the next-Friday weekly expiry.
+```
+straddle      = call_last + put_last        (ATM strike, both legs)
+implied_move  = straddle / strike           (≈ % return by expiry)
+breakevens    = spot ± straddle
+```
 
-At matched delta and DTE, P/S is proportional to **IV·√T** — so it's a clean way to spot names where you collect the most premium per dollar of underlying exposure (i.e. richly-priced names to sell).
+Higher implied_move = market expects bigger move = richer premium per dollar of strike. That's where the cross-sectional opportunity is to sell premium (or to fade rich vol). Top of the list = richest; bottom = cheapest.
+
+### Caveat: stale last-prices
+When a leg's last trade is from earlier in the day, put-call parity (C − P ≈ S − K) breaks and the straddle skews high. Best run after Friday close so both legs have fresh prints.
 
 ## Run
 

@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """
 P/S Dashboard scanner — pulls CBOE delayed option chains for the universe,
-finds the 30Δ call/put for the next-Friday weekly expiry, computes
-P/S = mid_premium / spot, and writes docs/results.json.
+finds the ATM straddle for the next-Friday weekly expiry, and computes the
+implied move ("expected return") priced in by the market:
 
-Run weekly after Friday close (or on demand). CBOE feed updates in delayed
-fashion throughout the day; the prev_day_close / last_trade_time fields
-indicate freshness.
+    straddle = call_last + put_last     (ATM, both legs)
+    implied_move = straddle / strike    (≈ % return by expiry)
+
+Higher implied_move = the market is pricing more movement = richer premium
+relative to underlying = better candidate to fade.
+
+Run after Friday's close to lock in EOD pricing for the next-Friday weekly.
 """
 import json, urllib.request, os, time, ssl
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -17,7 +21,6 @@ TICKERS = json.load(open(os.path.join(HERE, "universe.json")))
 NAMES = json.load(open(os.path.join(HERE, "universe_names.json")))
 
 CBOE = "https://cdn.cboe.com/api/global/delayed_quotes/options/{sym}.json"
-TARGET_DELTA = 0.30
 SSL_CTX = ssl.create_default_context()
 
 
@@ -49,19 +52,18 @@ def fetch(sym: str):
         return sym, {"error": str(e)[:120]}
 
 
-def mid(o):
+def last_or_mid(o):
+    """Prefer last traded price. Fall back to mid if last is stale/zero."""
+    last = o.get("last_trade_price")
+    if last and last > 0:
+        return last, "last"
     bid, ask = o.get("bid", 0), o.get("ask", 0)
     if bid > 0 and ask > 0:
-        return (bid + ask) / 2
-    return o.get("theo") or o.get("last_trade_price") or 0
-
-
-def closest(opts, target_delta):
-    """Pick the option whose delta is closest to target_delta."""
-    valid = [o for o in opts if o.get("delta") is not None]
-    if not valid:
-        return None
-    return min(valid, key=lambda o: abs(o["delta"] - target_delta))
+        return (bid + ask) / 2, "mid"
+    theo = o.get("theo")
+    if theo:
+        return theo, "theo"
+    return 0, "none"
 
 
 def analyze(sym: str, payload: dict, target_expiry: date):
@@ -73,14 +75,14 @@ def analyze(sym: str, payload: dict, target_expiry: date):
     if not spot or not opts:
         return {"sym": sym, "error": "no data"}
 
-    # Group by expiry
+    # Group by expiry → strike → {C, P}
     by_exp = {}
     for o in opts:
         try:
             exp, cp, k = parse_occ(o["option"], sym)
         except Exception:
             continue
-        by_exp.setdefault(exp, {"C": [], "P": []})[cp].append({**o, "_strike": k})
+        by_exp.setdefault(exp, {}).setdefault(k, {})[cp] = o
 
     if not by_exp:
         return {"sym": sym, "error": "no expiries parsed"}
@@ -91,14 +93,26 @@ def analyze(sym: str, payload: dict, target_expiry: date):
         expiries,
         key=lambda e: abs(date.fromisoformat(e).toordinal() - target_expiry.toordinal()),
     )
-    chain = by_exp[best_exp]
-    call = closest(chain["C"], TARGET_DELTA)
-    put = closest(chain["P"], -TARGET_DELTA)
-    if not call or not put:
-        return {"sym": sym, "error": f"no 30Δ pair at {best_exp}"}
+    chain_by_strike = by_exp[best_exp]
 
-    call_mid, put_mid = mid(call), mid(put)
+    # Find ATM strike — closest strike that has BOTH a call and a put
+    candidates = [(k, v) for k, v in chain_by_strike.items() if "C" in v and "P" in v]
+    if not candidates:
+        return {"sym": sym, "error": f"no straddle at {best_exp}"}
+    atm_k, legs = min(candidates, key=lambda kv: abs(kv[0] - spot))
+    call, put = legs["C"], legs["P"]
+    call_px, call_src = last_or_mid(call)
+    put_px,  put_src  = last_or_mid(put)
+    if call_px <= 0 or put_px <= 0:
+        return {"sym": sym, "error": f"no traded price at K={atm_k}"}
+
+    straddle = call_px + put_px
+    # Expected move = straddle / strike, expressed as a percentage
+    implied_move = straddle / atm_k * 100
+    # Also express as % of spot for comparability (when strike != spot)
+    implied_move_spot = straddle / spot * 100
     dte = (date.fromisoformat(best_exp) - date.today()).days
+
     return {
         "sym": sym,
         "name": NAMES.get(sym, sym),
@@ -106,20 +120,17 @@ def analyze(sym: str, payload: dict, target_expiry: date):
         "expiry": best_exp,
         "dte": dte,
         "iv30": round(d.get("iv30") or 0, 2),
-        "call_strike": call["_strike"],
-        "call_delta": round(call["delta"], 3),
-        "call_mid": round(call_mid, 3),
-        "call_iv": round(call.get("iv") or 0, 4),
-        "call_oi": int(call.get("open_interest") or 0),
-        "put_strike": put["_strike"],
-        "put_delta": round(put["delta"], 3),
-        "put_mid": round(put_mid, 3),
-        "put_iv": round(put.get("iv") or 0, 4),
-        "put_oi": int(put.get("open_interest") or 0),
-        # P/S in percent of spot (more readable than raw ratio)
-        "ps_call": round(call_mid / spot * 100, 3),
-        "ps_put": round(put_mid / spot * 100, 3),
-        "ps_avg": round((call_mid + put_mid) / 2 / spot * 100, 3),
+        "strike": atm_k,
+        "call_last": round(call_px, 3),
+        "call_src": call_src,
+        "put_last": round(put_px, 3),
+        "put_src": put_src,
+        "straddle": round(straddle, 3),
+        "implied_move": round(implied_move, 3),
+        "implied_move_spot": round(implied_move_spot, 3),
+        "breakeven_up": round(spot + straddle, 2),
+        "breakeven_dn": round(spot - straddle, 2),
+        "moneyness": round((atm_k - spot) / spot * 100, 3),
         "data_ts": payload.get("timestamp"),
     }
 
@@ -143,26 +154,14 @@ def run_scan():
         else:
             rows.append(r)
 
-    # Cross-sectional ranks
-    def rank(rows, key):
-        srt = sorted(rows, key=lambda r: -r[key])
-        out = {}
-        for i, r in enumerate(srt, 1):
-            out[r["sym"]] = i
-        return out
-
-    rank_call = rank(rows, "ps_call")
-    rank_put = rank(rows, "ps_put")
-    rank_avg = rank(rows, "ps_avg")
-    for r in rows:
-        r["rank_call"] = rank_call[r["sym"]]
-        r["rank_put"] = rank_put[r["sym"]]
-        r["rank_avg"] = rank_avg[r["sym"]]
+    # Cross-sectional rank by implied_move
+    srt = sorted(rows, key=lambda r: -r["implied_move"])
+    for i, r in enumerate(srt, 1):
+        r["rank"] = i
 
     out = {
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "target_expiry": target.isoformat(),
-        "target_delta": TARGET_DELTA,
         "scan_seconds": round(time.time() - t0, 2),
         "scanned": len(rows),
         "errors": errors,
@@ -173,7 +172,7 @@ def run_scan():
         json.dump(out, fh, indent=2)
     print(
         f"[{out['updated_at']}] scanned {len(rows)}/{len(TICKERS)} "
-        f"in {out['scan_seconds']}s ({len(errors)} errors). target expiry {target.isoformat()}"
+        f"in {out['scan_seconds']}s ({len(errors)} errors). expiry {target.isoformat()}"
     )
 
 

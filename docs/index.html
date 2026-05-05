@@ -6,7 +6,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>P/S Scan — Premium-to-Spot Ranking</title>
+<title>P/S Scan — Implied Move (ATM Straddle)</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -20,38 +20,36 @@
     </span>
   </div>
   <p class="subtitle">
-    Cross-sectional ranking of how much credit you collect per dollar of underlying exposure.
-    <span class="formula">P/S = option mid ÷ spot</span>, taken at <strong>30Δ</strong> for a near-week expiry.
-    At matched delta and DTE, P/S is proportional to <strong>IV·√T</strong> — a clean way to spot richly-priced names to sell.
+    The market's priced-in <strong>expected move</strong> for each name by Friday.
+    Sum the ATM call + put last prices, divide by strike — that's the breakeven move
+    a long straddle buyer needs, and equivalently the % of strike you collect for selling
+    the straddle. <span class="formula">implied_move = (call_last + put_last) / K</span>.
   </p>
   <div class="spec-row">
-    <span class="spec-pill"><span class="label">Target Δ</span><b id="spec-delta">0.30</b></span>
+    <span class="spec-pill"><span class="label">Strike</span><b>ATM</b></span>
+    <span class="spec-pill"><span class="label">Premium</span><b>last × 2 (call+put)</b></span>
     <span class="spec-pill"><span class="label">Expiry</span><b id="spec-expiry">—</b></span>
-    <span class="spec-pill"><span class="label">DTE (today)</span><b id="spec-dte">—</b></span>
+    <span class="spec-pill"><span class="label">DTE</span><b id="spec-dte">—</b></span>
     <span class="spec-pill"><span class="label">Universe</span><b id="spec-uni">—</b></span>
     <span class="spec-pill"><span class="label">Source</span><b>CBOE delayed</b></span>
   </div>
 </header>
 
 <main>
-<section class="red">
-  <h2><span class="dot dot-red"></span>Richest puts to sell <span class="count" id="puts-count"></span></h2>
-  <div id="puts-table" class="table-wrap"></div>
-</section>
-
-<section class="green">
-  <h2><span class="dot dot-green"></span>Richest calls to sell <span class="count" id="calls-count"></span></h2>
-  <div id="calls-table" class="table-wrap"></div>
-</section>
-
 <section class="accent">
-  <h2><span class="dot dot-accent"></span>Full ranking <span class="count" id="full-count"></span></h2>
+  <h2><span class="dot dot-accent"></span>Implied move ranking <span class="count" id="full-count"></span></h2>
   <div id="full-table" class="table-wrap"></div>
 </section>
 </main>
 
 <footer>
-  <p>Data: <a href="https://cdn.cboe.com/api/global/delayed_quotes/options/" target="_blank" rel="noopener">CBOE delayed quotes</a> (~15 min). Best run after Friday's close to lock in EOD pricing for the next-Friday weekly. <a href="https://github.com/piraci26/ps-dashboard" target="_blank" rel="noopener">source</a></p>
+  <p>
+    <strong>Note on last prices:</strong> CBOE delayed feed. ATM straddles are computed from <em>last_trade_price</em> per your spec.
+    When a leg's last trade is stale relative to current spot, put-call parity (C − P ≈ S − K) will be violated and the straddle skews high.
+    Best run after Friday close so both legs print fresh.
+    Data: <a href="https://cdn.cboe.com/api/global/delayed_quotes/options/" target="_blank" rel="noopener">CBOE delayed quotes</a> ·
+    <a href="https://github.com/piraci26/ps-dashboard" target="_blank" rel="noopener">source</a>
+  </p>
 </footer>
 
 <script>
@@ -68,57 +66,22 @@ const fmtUpd = iso => {
   return `Updated ${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} ${parts.timeZoneName}`;
 };
 
-const sortState = {
-  'puts-table':  { col: 'ps_put',  dir: 'desc' },
-  'calls-table': { col: 'ps_call', dir: 'desc' },
-  'full-table':  { col: 'ps_avg',  dir: 'desc' },
-};
+const sortState = { 'full-table': { col: 'implied_move', dir: 'desc' } };
 
-// Column definitions per table
-const COLS_PUTS = [
-  { key: 'rank',       label: '#',        cls: 'num',  type: 'num' },
-  { key: 'name',       label: 'Company',  cls: '',     type: 'str' },
-  { key: 'sym',        label: 'Sym',      cls: '',     type: 'str' },
-  { key: 'spot',       label: 'Spot',     cls: 'num',  type: 'num' },
-  { key: 'put_strike', label: 'K (put)',  cls: 'num',  type: 'num' },
-  { key: 'put_delta',  label: 'Δ',        cls: 'num',  type: 'num' },
-  { key: 'put_mid',    label: 'Mid',      cls: 'num',  type: 'num' },
-  { key: 'ps_put',     label: 'P/S %',    cls: 'num ps-cell',  type: 'num' },
-  { key: 'put_iv',     label: 'IV',       cls: 'num',  type: 'num' },
-  { key: 'put_oi',     label: 'OI',       cls: 'num',  type: 'num' },
+const COLS = [
+  { key: 'rank',         label: '#',         cls: 'num',  type: 'num' },
+  { key: 'name',         label: 'Company',   cls: '',     type: 'str' },
+  { key: 'sym',          label: 'Sym',       cls: '',     type: 'str' },
+  { key: 'spot',         label: 'Spot',      cls: 'num',  type: 'num' },
+  { key: 'strike',       label: 'K (ATM)',   cls: 'num',  type: 'num' },
+  { key: 'call_last',    label: 'Call last', cls: 'num',  type: 'num' },
+  { key: 'put_last',     label: 'Put last',  cls: 'num',  type: 'num' },
+  { key: 'straddle',     label: 'Straddle',  cls: 'num',  type: 'num' },
+  { key: 'implied_move', label: 'Move %',    cls: 'num ps-cell',  type: 'num' },
+  { key: 'breakeven_up', label: 'BE ↑',      cls: 'num',  type: 'num' },
+  { key: 'breakeven_dn', label: 'BE ↓',      cls: 'num',  type: 'num' },
+  { key: 'iv30',         label: 'IV30',      cls: 'num',  type: 'num' },
 ];
-
-const COLS_CALLS = [
-  { key: 'rank',        label: '#',        cls: 'num',  type: 'num' },
-  { key: 'name',        label: 'Company',  cls: '',     type: 'str' },
-  { key: 'sym',         label: 'Sym',      cls: '',     type: 'str' },
-  { key: 'spot',        label: 'Spot',     cls: 'num',  type: 'num' },
-  { key: 'call_strike', label: 'K (call)', cls: 'num',  type: 'num' },
-  { key: 'call_delta',  label: 'Δ',        cls: 'num',  type: 'num' },
-  { key: 'call_mid',    label: 'Mid',      cls: 'num',  type: 'num' },
-  { key: 'ps_call',     label: 'P/S %',    cls: 'num ps-cell',  type: 'num' },
-  { key: 'call_iv',     label: 'IV',       cls: 'num',  type: 'num' },
-  { key: 'call_oi',     label: 'OI',       cls: 'num',  type: 'num' },
-];
-
-const COLS_FULL = [
-  { key: 'rank',        label: '#',        cls: 'num',  type: 'num' },
-  { key: 'name',        label: 'Company',  cls: '',     type: 'str' },
-  { key: 'sym',         label: 'Sym',      cls: '',     type: 'str' },
-  { key: 'spot',        label: 'Spot',     cls: 'num',  type: 'num' },
-  { key: 'iv30',        label: 'IV30',     cls: 'num',  type: 'num' },
-  { key: 'call_strike', label: 'C-K',      cls: 'num',  type: 'num' },
-  { key: 'ps_call',     label: 'P/S Call', cls: 'num ps-cell',  type: 'num' },
-  { key: 'put_strike',  label: 'P-K',      cls: 'num',  type: 'num' },
-  { key: 'ps_put',      label: 'P/S Put',  cls: 'num ps-cell',  type: 'num' },
-  { key: 'ps_avg',      label: 'P/S Avg',  cls: 'num ps-cell',  type: 'num' },
-];
-
-const COLS_BY_TABLE = {
-  'puts-table':  COLS_PUTS,
-  'calls-table': COLS_CALLS,
-  'full-table':  COLS_FULL,
-};
 
 function sortRows(rows, col, dir) {
   const sorted = rows.slice();
@@ -132,10 +95,10 @@ function sortRows(rows, col, dir) {
   return sorted;
 }
 
-function heatbar(value, maxValue, klass) {
+function heatbar(value, maxValue) {
   if (value == null || maxValue <= 0) return '';
   const pct = Math.min(100, (value / maxValue) * 100);
-  return `<span class="heatbar"><span class="heatbar-fill ${klass}" style="width:${pct.toFixed(1)}%"></span></span>`;
+  return `<span class="heatbar"><span class="heatbar-fill avg" style="width:${pct.toFixed(1)}%"></span></span>`;
 }
 
 function fmtCell(col, r, ctx) {
@@ -144,71 +107,49 @@ function fmtCell(col, r, ctx) {
     case 'rank': return r.rank;
     case 'sym':  return `<strong>${r.sym}</strong>`;
     case 'name': return r.name;
-    case 'spot': return `$${fmtNum(v)}`;
-    case 'iv30': return v ? `${v.toFixed(1)}` : '—';
-    case 'call_strike':
-    case 'put_strike': return `$${fmtNum(v)}`;
-    case 'call_delta':
-    case 'put_delta':  return v == null ? '—' : v.toFixed(2);
-    case 'call_mid':
-    case 'put_mid':    return `$${fmtNum(v)}`;
-    case 'call_iv':
-    case 'put_iv':     return v == null ? '—' : `${(v*100).toFixed(0)}%`;
-    case 'call_oi':
-    case 'put_oi':     return v == null ? '—' : v.toLocaleString();
-    case 'ps_call':
-      return heatbar(v, ctx.maxCall, 'call') + `<span class="ps-call-hot">${fmtPct(v, 2)}</span>`;
-    case 'ps_put':
-      return heatbar(v, ctx.maxPut, 'put') + `<span class="ps-put-hot">${fmtPct(v, 2)}</span>`;
-    case 'ps_avg':
-      return heatbar(v, ctx.maxAvg, 'avg') + `<strong>${fmtPct(v, 2)}</strong>`;
+    case 'spot':
+    case 'strike':
+    case 'breakeven_up':
+    case 'breakeven_dn': return `$${fmtNum(v)}`;
+    case 'call_last':
+    case 'put_last':
+    case 'straddle':    return `$${fmtNum(v)}`;
+    case 'iv30':        return v ? `${v.toFixed(1)}` : '—';
+    case 'implied_move':
+      return heatbar(v, ctx.maxMove) + `<strong>${fmtPct(v, 2)}</strong>`;
     default: return v ?? '—';
   }
 }
 
-function renderTable(allRows, tableId, rankBy) {
-  if (!allRows || allRows.length === 0) {
-    return '<p class="empty">No data.</p>';
-  }
-  const cols = COLS_BY_TABLE[tableId];
+function renderTable(allRows, tableId) {
+  if (!allRows || allRows.length === 0) return '<p class="empty">No data.</p>';
   const state = sortState[tableId];
-  // Compute the displayed rank using rankBy (ps_put / ps_call / ps_avg)
-  const ranked = allRows.slice().sort((a, b) => b[rankBy] - a[rankBy]);
+  const ranked = allRows.slice().sort((a, b) => b.implied_move - a.implied_move);
   ranked.forEach((r, i) => r.rank = i + 1);
   const sorted = sortRows(ranked, state.col, state.dir);
-  const ctx = {
-    maxCall: Math.max(...allRows.map(r => r.ps_call || 0)),
-    maxPut:  Math.max(...allRows.map(r => r.ps_put  || 0)),
-    maxAvg:  Math.max(...allRows.map(r => r.ps_avg  || 0)),
-  };
+  const ctx = { maxMove: Math.max(...allRows.map(r => r.implied_move || 0)) };
   const arrow = (key) => {
     if (state.col !== key) return '<span class="sort-arrow">↕</span>';
     return state.dir === 'asc' ? '<span class="sort-arrow active">↑</span>' : '<span class="sort-arrow active">↓</span>';
   };
-  const headCells = cols.map(c => {
+  const headCells = COLS.map(c => {
     const cls = (c.cls + ' sortable' + (state.col === c.key ? ' sorted' : '')).trim();
     return `<th class="${cls}" data-col="${c.key}" data-table="${tableId}">${c.label}${arrow(c.key)}</th>`;
   }).join('');
   const head = `<table><thead><tr>${headCells}</tr></thead><tbody>`;
   const body = sorted.map(r => {
-    const cells = cols.map(c => `<td class="${c.cls}">${fmtCell(c, r, ctx)}</td>`).join('');
+    const cells = COLS.map(c => `<td class="${c.cls}">${fmtCell(c, r, ctx)}</td>`).join('');
     return `<tr>${cells}</tr>`;
   }).join('');
   return head + body + '</tbody></table>';
 }
 
 let dataCache = null;
-let mcapMin = 0;
 
 function rerender() {
   if (!dataCache) return;
-  const rows = dataCache.rows;
-  document.getElementById('puts-table').innerHTML  = renderTable(rows, 'puts-table',  'ps_put');
-  document.getElementById('calls-table').innerHTML = renderTable(rows, 'calls-table', 'ps_call');
-  document.getElementById('full-table').innerHTML  = renderTable(rows, 'full-table',  'ps_avg');
-  document.getElementById('puts-count').textContent  = `(${rows.length})`;
-  document.getElementById('calls-count').textContent = `(${rows.length})`;
-  document.getElementById('full-count').textContent  = `(${rows.length})`;
+  document.getElementById('full-table').innerHTML = renderTable(dataCache.rows, 'full-table');
+  document.getElementById('full-count').textContent = `(${dataCache.rows.length})`;
   attachSortHandlers();
 }
 
@@ -236,10 +177,8 @@ async function load() {
     dataCache = data;
     document.getElementById('updated').textContent = fmtUpd(data.updated_at);
     document.getElementById('stats').textContent = `${data.scanned} tickers · scan ${data.scan_seconds}s`;
-    document.getElementById('spec-delta').textContent = data.target_delta?.toFixed(2) ?? '0.30';
     document.getElementById('spec-expiry').textContent = data.target_expiry || '—';
     document.getElementById('spec-uni').textContent = `${data.scanned} largest US`;
-    // DTE today
     if (data.target_expiry) {
       const t = new Date(data.target_expiry + 'T00:00:00Z');
       const days = Math.round((t - new Date()) / 86400000);
