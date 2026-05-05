@@ -20,9 +20,10 @@
     </span>
   </div>
   <p class="subtitle">
-    Sell the ATM straddle, post the strike as collateral, collect the premium for one week —
-    that ratio is your gross weekly return on allocated capital.
-    <span class="formula">yield = (call_last + put_last) / strike</span>.
+    Take the ATM straddle to define an implied-move band. Then sell the OTM tail option <strong>at</strong> the breakeven strike and divide its price by that strike — that's the yield on capital at the move boundary, where premium should be approaching zero if the straddle is fairly priced. High yield = the tail is rich.
+    <span class="formula">straddle = call_atm + put_atm</span> ·
+    <span class="formula">yield_dn = put(K = spot − straddle) / K</span> ·
+    <span class="formula">yield_up = call(K = spot + straddle) / K</span>
   </p>
   <div class="spec-row">
     <span class="spec-pill"><span class="label">Strike</span><b>ATM</b></span>
@@ -85,24 +86,25 @@ const fmtUpd = iso => {
   return `Updated ${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} ${parts.timeZoneName}`;
 };
 
-const sortState = { 'full-table': { col: 'yield_pct', dir: 'desc' } };
+const sortState = { 'full-table': { col: 'yield_avg', dir: 'desc' } };
 
 const COLS = [
-  { key: 'rank',             label: '#',          cls: 'num',  type: 'num' },
-  { key: 'name',             label: 'Company',    cls: '',     type: 'str' },
-  { key: 'sym',              label: 'Sym',        cls: '',     type: 'str' },
-  { key: 'mcap',             label: 'Mkt Cap',    cls: 'num',  type: 'num' },
-  { key: 'spot',             label: 'Spot',       cls: 'num',  type: 'num' },
-  { key: 'strike',           label: 'K (ATM)',    cls: 'num',  type: 'num' },
-  { key: 'call_last',        label: 'Call last',  cls: 'num',  type: 'num' },
-  { key: 'put_last',         label: 'Put last',   cls: 'num',  type: 'num' },
-  { key: 'straddle',         label: 'Straddle',   cls: 'num',  type: 'num' },
-  { key: 'yield_pct',        label: 'Yield %',    cls: 'num ps-cell',  type: 'num' },
-  { key: 'parity_skew_pct',  label: 'Skew',       cls: 'num',  type: 'num' },
-  { key: 'premium_per_100k', label: '$ / 100k',   cls: 'num',  type: 'num' },
-  { key: 'breakeven_up',     label: 'BE ↑',       cls: 'num',  type: 'num' },
-  { key: 'breakeven_dn',     label: 'BE ↓',       cls: 'num',  type: 'num' },
-  { key: 'iv30',             label: 'IV30',       cls: 'num',  type: 'num' },
+  { key: 'rank',           label: '#',          cls: 'num',  type: 'num' },
+  { key: 'name',           label: 'Company',    cls: '',     type: 'str' },
+  { key: 'sym',            label: 'Sym',        cls: '',     type: 'str' },
+  { key: 'mcap',           label: 'Mkt Cap',    cls: 'num',  type: 'num' },
+  { key: 'spot',           label: 'Spot',       cls: 'num',  type: 'num' },
+  { key: 'atm_strike',     label: 'K (ATM)',    cls: 'num',  type: 'num' },
+  { key: 'straddle',       label: 'Straddle',   cls: 'num',  type: 'num' },
+  { key: 'dn_strike',      label: 'K↓',         cls: 'num',  type: 'num' },
+  { key: 'put_otm_last',   label: 'Put @ K↓',   cls: 'num',  type: 'num' },
+  { key: 'yield_otm_put',  label: 'Yield ↓',    cls: 'num ps-cell',  type: 'num' },
+  { key: 'up_strike',      label: 'K↑',         cls: 'num',  type: 'num' },
+  { key: 'call_otm_last',  label: 'Call @ K↑',  cls: 'num',  type: 'num' },
+  { key: 'yield_otm_call', label: 'Yield ↑',    cls: 'num ps-cell',  type: 'num' },
+  { key: 'yield_avg',      label: 'Yield avg',  cls: 'num ps-cell',  type: 'num' },
+  { key: 'parity_skew_pct',label: 'Skew',       cls: 'num',  type: 'num' },
+  { key: 'iv30',           label: 'IV30',       cls: 'num',  type: 'num' },
 ];
 
 function sortRows(rows, col, dir) {
@@ -131,19 +133,20 @@ function fmtCell(col, r, ctx) {
     case 'name': return r.name;
     case 'mcap': return fmtMcap(v);
     case 'spot':
-    case 'strike':
-    case 'breakeven_up':
-    case 'breakeven_dn': return `$${fmtNum(v)}`;
-    case 'call_last':
-    case 'put_last':
-    case 'straddle':    return `$${fmtNum(v)}`;
+    case 'atm_strike':
+    case 'dn_strike':
+    case 'up_strike':   return v == null ? '—' : `$${fmtNum(v)}`;
+    case 'put_otm_last':
+    case 'call_otm_last':
+    case 'straddle':    return v == null ? '—' : `$${fmtNum(v)}`;
     case 'iv30':        return v ? `${v.toFixed(1)}` : '—';
     case 'parity_skew_pct':
       if (v == null) return '—';
-      const cls = r.stale ? 'stale' : '';
-      return `<span class="${cls}">${v.toFixed(2)}%</span>`;
-    case 'premium_per_100k': return fmt100k(v);
-    case 'yield_pct':
+      return `<span class="${r.stale_atm ? 'stale' : ''}">${v.toFixed(2)}%</span>`;
+    case 'yield_otm_put':
+    case 'yield_otm_call':
+    case 'yield_avg':
+      if (v == null) return '—';
       return heatbar(v, ctx.maxYield) + `<strong>${fmtPct(v, 2)}</strong>`;
     default: return v ?? '—';
   }
@@ -152,10 +155,10 @@ function fmtCell(col, r, ctx) {
 function renderTable(allRows, tableId) {
   if (!allRows || allRows.length === 0) return '<p class="empty">No rows match the current filter.</p>';
   const state = sortState[tableId];
-  const ranked = allRows.slice().sort((a, b) => b.yield_pct - a.yield_pct);
+  const ranked = allRows.slice().sort((a, b) => (b.yield_avg || 0) - (a.yield_avg || 0));
   ranked.forEach((r, i) => r.rank = i + 1);
   const sorted = sortRows(ranked, state.col, state.dir);
-  const ctx = { maxYield: Math.max(...allRows.map(r => r.yield_pct || 0)) };
+  const ctx = { maxYield: Math.max(...allRows.map(r => Math.max(r.yield_otm_put || 0, r.yield_otm_call || 0))) };
   const arrow = (key) => {
     if (state.col !== key) return '<span class="sort-arrow">↕</span>';
     return state.dir === 'asc' ? '<span class="sort-arrow active">↑</span>' : '<span class="sort-arrow active">↓</span>';
@@ -181,7 +184,8 @@ function applyFilter() {
   const hideStale = document.getElementById('hide-stale').checked;
   return dataCache.rows.filter(r => {
     if ((r.mcap || 0) < minMcap) return false;
-    if (hideStale && r.stale) return false;
+    if (hideStale && r.stale_atm) return false;
+    if (r.yield_avg == null) return false;
     return true;
   });
 }

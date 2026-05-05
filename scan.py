@@ -133,13 +133,39 @@ def analyze(sym: str, payload: dict, target_expiry: date):
         return {"sym": sym, "error": f"no traded price at K={atm_k}"}
 
     straddle = call_px + put_px
-    yield_pct = straddle / atm_k * 100
     dte = (date.fromisoformat(best_exp) - date.today()).days
     # Put-call parity check: C − P should ≈ S − K (rate ≈ 0 at 1w).
-    # Big deviation means at least one leg's last print is stale → flag it.
     parity_skew = abs((call_px - put_px) - (spot - atm_k))
-    parity_skew_pct = parity_skew / spot * 100  # as % of spot
-    stale = parity_skew_pct > 0.5  # >0.5% of spot = leg is stale
+    parity_skew_pct = parity_skew / spot * 100
+    stale_atm = parity_skew_pct > 0.5
+
+    # ─── OTM tail options at spot ± straddle ─────────────────────────
+    # Move away from spot by the straddle amount; that's the breakeven strike.
+    # Pull the put at the down strike, call at the up strike, divide by that
+    # strike — that's the tail option's yield.
+    down_target = spot - straddle
+    up_target   = spot + straddle
+
+    def find_closest(side, target):
+        """Side='C' or 'P'. Returns (strike, option) closest to target."""
+        cands = [(k, v[side]) for k, v in chain_by_strike.items() if side in v]
+        if not cands:
+            return None, None
+        return min(cands, key=lambda kv: abs(kv[0] - target))
+
+    dn_k, put_otm = find_closest("P", down_target)
+    up_k, call_otm = find_closest("C", up_target)
+
+    put_otm_px, put_otm_src = last_or_mid(put_otm) if put_otm else (0, "none")
+    call_otm_px, call_otm_src = last_or_mid(call_otm) if call_otm else (0, "none")
+
+    yield_otm_put  = (put_otm_px  / dn_k * 100) if (dn_k and put_otm_px > 0) else None
+    yield_otm_call = (call_otm_px / up_k * 100) if (up_k and call_otm_px > 0) else None
+    # Headline yield: the larger of the two tails (the "fattest" side)
+    yields = [y for y in (yield_otm_put, yield_otm_call) if y is not None]
+    yield_pct = max(yields) if yields else None
+    # And an averaged version (cleaner cross-section)
+    yield_avg = (sum(yields) / len(yields)) if yields else None
 
     return {
         "sym": sym,
@@ -149,20 +175,23 @@ def analyze(sym: str, payload: dict, target_expiry: date):
         "expiry": best_exp,
         "dte": dte,
         "iv30": round(d.get("iv30") or 0, 2),
-        "strike": atm_k,
-        "call_last": round(call_px, 3),
-        "call_src": call_src,
-        "put_last": round(put_px, 3),
-        "put_src": put_src,
+        # ATM straddle (used to compute the move)
+        "atm_strike": atm_k,
+        "call_atm_last": round(call_px, 3),
+        "put_atm_last": round(put_px, 3),
         "straddle": round(straddle, 3),
-        "yield_pct": round(yield_pct, 3),
-        "premium_per_100k": round(100_000 * straddle / atm_k, 2),
-        "breakeven_up": round(spot + straddle, 2),
-        "breakeven_dn": round(spot - straddle, 2),
         "parity_skew_pct": round(parity_skew_pct, 3),
-        "stale": bool(stale),
-        "call_oi": int(call.get("open_interest") or 0),
-        "put_oi": int(put.get("open_interest") or 0),
+        "stale_atm": bool(stale_atm),
+        # The actual signal — OTM tail options at spot ± straddle
+        "dn_strike": round(dn_k, 2) if dn_k is not None else None,
+        "up_strike": round(up_k, 2) if up_k is not None else None,
+        "put_otm_last": round(put_otm_px, 3) if put_otm_px else None,
+        "call_otm_last": round(call_otm_px, 3) if call_otm_px else None,
+        "yield_otm_put":  round(yield_otm_put, 3)  if yield_otm_put  is not None else None,
+        "yield_otm_call": round(yield_otm_call, 3) if yield_otm_call is not None else None,
+        # headline = max of the two tails; avg = clean cross-section
+        "yield_pct": round(yield_pct, 3) if yield_pct is not None else None,
+        "yield_avg": round(yield_avg, 3) if yield_avg is not None else None,
         "data_ts": payload.get("timestamp"),
     }
 
@@ -191,7 +220,7 @@ def run_scan():
         else:
             rows.append(r)
 
-    srt = sorted(rows, key=lambda r: -r["yield_pct"])
+    srt = sorted(rows, key=lambda r: -(r.get("yield_avg") or r.get("yield_pct") or 0))
     for i, r in enumerate(srt, 1):
         r["rank"] = i
 
